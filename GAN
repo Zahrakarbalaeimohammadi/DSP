@@ -1,0 +1,80 @@
+clc
+clear
+close all
+url = "http://download.tensorflow.org/example_images/flower_photos.tgz";
+downloadFolder = tempdir; 
+filename = fullfile(downloadFolder,"flower_dataset.tgz"); 
+imageFolder = fullfile(downloadFolder,"flower_photos"); 
+if ~exist(imageFolder,"dir") 
+    disp("Downloading Flowers data set (218 MB)...") 
+    websave(filename,url); 
+    untar(filename,downloadFolder) 
+end
+datasetFolder = fullfile(imageFolder); 
+imds = imageDatastore(datasetFolder,IncludeSubfolders=true);
+augmenter = imageDataAugmenter(RandXReflection=true); 
+augimds = augmentedImageDatastore([64 64],imds,DataAugmentation=augmenter);
+filterSize = 5; 
+numFilters = 64; 
+numLatentInputs = 100; 
+projectionSize = [4 4 512]; 
+layersGenerator = [ 
+    featureInputLayer(numLatentInputs) 
+    projectAndReshapeLayer(projectionSize,numLatentInputs) 
+    transposedConv2dLayer(filterSize,4*numFilters) 
+    batchNormalizationLayer 
+    reluLayer 
+    transposedConv2dLayer(filterSize,2*numFilters,Stride=2,Cropping="same") 
+    batchNormalizationLayer 
+    reluLayer 
+    transposedConv2dLayer(filterSize,numFilters,Stride=2,Cropping="same") 
+    batchNormalizationLayer 
+    reluLayer 
+    transposedConv2dLayer(filterSize,3,Stride=2,Cropping="same") 
+    tanhLayer];
+netG = dlnetwork(layersGenerator);
+dropoutProb = 0.5; 
+numFilters = 64; 
+scale = 0.2; 
+inputSize = [64 64 3]; 
+filterSize = 5; 
+layersDiscriminator = [ 
+    imageInputLayer(inputSize,Normalization="none") 
+    dropoutLayer(dropoutProb) 
+    convolution2dLayer(filterSize,numFilters,Stride=2,Padding="same") 
+    leakyReluLayer(scale) 
+    convolution2dLayer(filterSize,2*numFilters,Stride=2,Padding="same") 
+    batchNormalizationLayer 
+    leakyReluLayer(scale) 
+    convolution2dLayer(filterSize,4*numFilters,Stride=2,Padding="same") 
+    batchNormalizationLayer 
+    leakyReluLayer(scale) 
+    convolution2dLayer(filterSize,8*numFilters,Stride=2,Padding="same") 
+    batchNormalizationLayer 
+    leakyReluLayer(scale) 
+    convolution2dLayer(4,1) 
+    sigmoidLayer];
+netD = dlnetwork(layersDiscriminator);
+numEpochs = 500; 
+miniBatchSize = 128;
+learnRate = 0.0002; 
+gradientDecayFactor = 0.5; 
+squaredGradientDecayFactor = 0.999;
+flipProb = 0.35;
+validationFrequency = 100;
+augimds.MiniBatchSize = miniBatchSize; 
+mbq = minibatchqueue(augimds, ... 
+    MiniBatchSize=miniBatchSize, ... 
+    PartialMiniBatch="discard", ... 
+    MiniBatchFcn=@preprocessMiniBatch, ... 
+    MiniBatchFormat="SSCB");
+trailingAvgG = []; 
+trailingAvgSqG = []; 
+trailingAvg = []; 
+trailingAvgSqD = [];
+numValidationImages = 25; 
+ZValidation = randn(numLatentInputs,numValidationImages,"single");
+ZValidation = dlarray(ZValidation,"CB");
+if canUseGPU 
+    ZValidation = gpuArray(ZValidation); 
+end
